@@ -4,6 +4,11 @@ import pandas as pd
 import talib
 import time
 import datetime
+import requests.exceptions
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
 
 import logging
 
@@ -143,6 +148,7 @@ def get_historical_data(symbol, start_date, end_date):
 # Main trading loop
 def trading_loop(symbol, start_date, end_date):
     while True:
+        print("Trading:", symbol)
         current_time = datetime.datetime.now()
         
         # Break the loop if the current time is after the specified end date
@@ -152,58 +158,241 @@ def trading_loop(symbol, start_date, end_date):
         # Fetch historical data
         data = get_historical_data(symbol, start_date, end_date)
         
-        # Analyze market conditions
-        conditions = analyze_market_conditions(data)
-        if conditions is None: continue
-        
-        # Choose strategy based on conditions
-        selected_strategy = combined_strategy(data, conditions)
-        print(selected_strategy)
-        
-        if selected_strategy:
-            # Execute the selected strategy
-            execute_strategy(selected_strategy)
+        # Define parameters for technical indicators
+        short_period = 20
+        long_period = 50
+        macd_params = {'short_period': 12, 'long_period': 26, 'signal_period': 9}
+        bollinger_params = {'window': 20, 'num_std_dev': 2}
+        rsi_params = {'rsi_window': 14, 'rsi_overbought': 70, 'rsi_oversold': 30}
 
+        # Choose strategy based on multiple indicators
+        selected_strategy = multiple_indicators_strategy(data, short_period, long_period, macd_params, bollinger_params, rsi_params)
+        print("\n")
+        print("Selected strategy:", selected_strategy)
+        
+        if selected_strategy == 'buy':
+            # Execute the buy strategy
+            execute_buy_order(symbol)
+
+        elif selected_strategy == 'sell':
+            # Execute the sell strategy
+            execute_sell_order(symbol)
+        
+        # Implement additional logic for hold or other strategies
+        
         # close_trades(api, symbol)
         
         time.sleep(60)   # Wait for a minute before making the next decision
 
-def analyze_market_conditions(data):
-    # Calculate SMA for short and long periods
-    sma_short = data['Close'].rolling(window=20).mean()
-    sma_long = data['Close'].rolling(window=50).mean()
-    
-    # Calculate RSI
-    delta = data['Close'].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+def get_fundamental_data(symbol):
+    try:
+        # Check if the symbol is valid (exists in Yahoo Finance)
+        stock = yf.Ticker(symbol)
+        info = stock.info  # Fetch stock information to check if it's valid
+        
+        if info is None:
+            print(f"Invalid symbol: {symbol}")
+            return None, None, None, None
 
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
+        # Get the latest financial data
+        financials = stock.financials
+        if not financials.empty:
+            # Example: Check if 'PriceToEarningsRatio' exists and use it
+            if 'PriceToEarningsRatio' in financials.columns:
+                pe_ratio = financials['PriceToEarningsRatio'].iloc[-1]
+            else:
+                print(f"P/E ratio not found for {symbol}")
+                pe_ratio = None
 
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    # Inside the analyze_market_conditions function
-    atr = talib.ATR(data['High'], data['Low'], data['Close'], timeperiod=14)
-    
-    # Calculate Bollinger Bands
-    middle_band = data['Close'].rolling(window=20).mean()
-    std_dev = data['Close'].rolling(window=20).std()
-    upper_band = middle_band + 2 * std_dev
-    lower_band = middle_band - 2 * std_dev
-    
-    # Calculate MACD
-    macd, signal_line, _ = talib.MACD(data['Close'])
-    
-    # Implement logic to analyze market conditions based on indicators
-    conditions = {
-        'trend_up': sma_short.iloc[-1] > sma_long.iloc[-1],
-        'oversold': rsi.iloc[-1] < 30,
-        'volatility_high': atr.iloc[-1] > 1.0,
-        'bollinger_bands_signal': data['Close'].iloc[-1] < lower_band.iloc[-1],
-        'macd_signal': macd.iloc[-1] > signal_line.iloc[-1]
+        # Get the latest balance sheet data
+        balance_sheet = stock.balance_sheet
+        if not balance_sheet.empty:
+            # Extract the most recent P/B ratio
+            if 'PriceToBookRatio' in balance_sheet.columns:
+                pb_ratio = balance_sheet['PriceToBookRatio'].iloc[-1]
+            else:
+                print(f"P/B ratio not found for {symbol}")
+                pb_ratio = None
+
+            # Extract Debt-to-Equity (D/E) ratio
+            de_ratio = balance_sheet['Total Debt'] / balance_sheet['Total Equity']
+
+            # Extract Dividend Yield
+            dividend_yield = financials['Forward Dividend & Yield'].iloc[-1]
+
+        return pe_ratio, pb_ratio, de_ratio, dividend_yield
+
+    except requests.exceptions.RequestException as conn_error:
+        print(f"Connection error while fetching data for {symbol}: {conn_error}")
+        return None, None, None, None
+    except Exception as e:
+        print(f"Error fetching fundamental data for {symbol}: {e.__class__.__name__} - {str(e)}")
+        return None, None, None, None
+def fundamental_analysis(pe_ratio, pb_ratio, de_ratio, dividend_yield, custom_rules=None):
+    # Define default analysis rules
+    default_rules = {
+        'PE_Ratio_Buy_Threshold': 15,
+        'PB_Ratio_Buy_Threshold': 1,
+        'DE_Ratio_Sell_Threshold': 2,
+        'Dividend_Yield_Buy_Threshold': 0.03
     }
-    return conditions
+
+    # Merge custom rules with default rules
+    analysis_rules = {**default_rules, **(custom_rules or {})}
+
+    # Evaluate buy/sell/hold signals based on fundamental metrics
+    signals = []
+    if pe_ratio is not None:
+        if pe_ratio < analysis_rules['PE_Ratio_Buy_Threshold']:
+            signals.append('Buy')
+        else:
+            signals.append('Hold')
+    else:
+        signals.append('Hold')
+
+    if pb_ratio is not None:
+        if pb_ratio < analysis_rules['PB_Ratio_Buy_Threshold']:
+            signals.append('Buy')
+        else:
+            signals.append('Hold')
+    else:
+        signals.append('Hold')
+
+    if de_ratio is not None:
+        if de_ratio > analysis_rules['DE_Ratio_Sell_Threshold']:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+    else:
+        signals.append('Hold')
+
+    if dividend_yield is not None:
+        if dividend_yield > analysis_rules['Dividend_Yield_Buy_Threshold']:
+            signals.append('Buy')
+        else:
+            signals.append('Hold')
+    else:
+        signals.append('Hold')
+
+    # The final signal is determined by a majority vote among the signals
+    if signals.count('Buy') > signals.count('Sell'):
+        return 'Buy'
+    elif signals.count('Sell') > signals.count('Buy'):
+        return 'Sell'
+    else:
+        return 'Hold'
+
+def execute_sell_order(symbol):
+    try:
+        api.submit_order(
+            symbol=symbol,
+            qty=quantity,
+            side='sell',
+            type='market',
+            time_in_force='gtc'
+        )
+        logging.info(f'Sell order executed: {quantity} shares of {symbol}')
+    except Exception as e:
+        logging.error(f"Error executing sell order: {e}")
+
+def execute_buy_order(symbol):
+
+    try:
+        api.submit_order(
+            symbol=symbol,
+            qty=quantity,
+            side='buy',
+            type='market',
+            time_in_force='gtc'
+        )
+        logging.info(f'Buy order executed: {quantity} shares of {symbol}')
+    except Exception as e:
+        logging.error(f"Error executing buy order: {e}")
+
+
+# Import the necessary libraries and set up logging and API credentials as before...
+
+# Define different trading strategies as before...
+
+# Combine strategies based on market conditions
+def multiple_indicators_strategy(data, short_period, long_period, macd_params, bollinger_params, rsi_params):
+    # Initialize counters for buy and sell signals
+    buy_signals = 0
+    hold_signals = 0
+    sell_signals = 0
+    
+    # Check signals from each indicator and count buy and sell signals
+    sma_strategy = simple_moving_average_strategy(data, short_period, long_period)
+    if sma_strategy == 'buy':
+        print("sma_strategy: buy", end='\t')
+        buy_signals += 1
+    elif sma_strategy == 'sell':
+        print("sma_strategy: sell", end='\t')
+        sell_signals += 1
+    else:
+        hold_signals += 1
+        print("sma_strategy: hold", end='\t')
+    
+    macd_strat = macd_strategy(data, **macd_params)
+    if macd_strat == 'buy':
+        buy_signals += 1
+        print("macd_strat: buy", end='\t')
+    elif macd_strat == 'sell':
+        print("macd_strat: sell", end='\t')
+        sell_signals += 1
+    else:
+        hold_signals += 1
+        print("macd_strat: hold", end='\t')
+    
+    bb_strat = bollinger_bands_strategy(data, **bollinger_params)
+    if bb_strat == 'buy':
+        print("bb_strat: buy", end='\t')
+        buy_signals += 1
+    elif bb_strat == 'sell':
+        print("bb_strat: sell", end='\t')
+        sell_signals += 1
+    else:
+        hold_signals += 1
+        print("bb_strat: hold", end='\t')
+    
+    rsi_strat = advanced_rsi_strategy(data, **rsi_params)
+    if rsi_strat == 'buy':
+        print("rsi_strat: buy", end='\t')
+        buy_signals += 1
+    elif rsi_strat == 'sell':
+        print("rsi_strat: sell", end='\t')
+        sell_signals += 1
+    else:
+        hold_signals += 1
+        print("rsi_strat: hold", end='\t')
+
+
+    # pe_ratio, pb_ratio, de_ratio, dividend_yield = get_fundamental_data(symbol)
+    # custom_rules = {
+    #     'PE_Ratio_Buy_Threshold': 12,  # Custom threshold for P/E ratio
+    #     'Dividend_Yield_Buy_Threshold': 0.035  # Custom threshold for dividend yield
+    # }
+    # recommendation = fundamental_analysis(pe_ratio, pb_ratio, de_ratio, dividend_yield, custom_rules)
+    # if recommendation == 'Buy':
+    #     print("fundamental analysis: buy", end='\t')
+    #     buy_signals += 1
+    # elif recommendation == 'Sell':
+    #     print("fundamental analysis: sell", end='\t')
+    #     sell_signals += 1
+    # else:
+    #     hold_signals += 1
+    #     print("fundamental analysis: hold", end='\t')
+    # # Decide based on the majority vote
+    if buy_signals > sell_signals and buy_signals > hold_signals:
+        return 'buy'
+    elif sell_signals > buy_signals and sell_signals > hold_signals:
+        return 'sell'
+    else:
+        return 'hold'
+
+
+
+# Rest of your code remains the same...
 
 
 
@@ -232,42 +421,9 @@ def close_trades(api, symbol):
                 except Exception as e:
                     logging.error(f"Error executing sell order to close position: {e}")
 
-def execute_strategy(strategy):
-    global api  # You might need to adjust this depending on your code structure
-    
-    # Define trade parameters
-    symbol = 'NVDA'
-    print("Trading", symbol)
-    quantity = calculate_optimal_quantity(api, symbol)
-    
-    if strategy == 'buy':
-        try:
-            api.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side='buy',
-                type='market',
-                time_in_force='gtc'
-            )
-            logging.info(f'Buy order executed: {quantity} shares of {symbol}')
-        except Exception as e:
-            logging.error(f"Error executing buy order: {e}")
-    
-    elif strategy == 'sell':
-        try:
-            api.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side='sell',
-                type='market',
-                time_in_force='gtc'
-            )
-            logging.info(f'Sell order executed: {quantity} shares of {symbol}')
-        except Exception as e:
-            logging.error(f"Error executing sell order: {e}")
 
 if __name__ == '__main__':
-    symbol = 'NVDA'  # Stock symbol to trade
+    symbol = 'LBRT'  # Stock symbol to trade
 
     start_date = '2023-01-01'
     end_date = '2023-08-31'

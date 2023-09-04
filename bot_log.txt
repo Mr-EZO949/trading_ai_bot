@@ -1,0 +1,9 @@
+2023-09-04 18:15:03,629 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:16:08,759 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:18:40,315 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:19:38,560 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:38:33,150 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:43:05,871 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:43:59,125 - ERROR - Error executing buy order: name 'quantity' is not defined
+2023-09-04 18:58:41,799 - ERROR - Error executing sell order: name 'quantity' is not defined
+2023-09-04 19:00:22,622 - ERROR - Error executing buy order: name 'quantity' is not defined
